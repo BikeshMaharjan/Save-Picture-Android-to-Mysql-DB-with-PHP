@@ -48,7 +48,11 @@ import android.Manifest;
 
         import com.example.bikeshmaharjan.camera_application.Database.PictureDB;
 
-        import java.io.ByteArrayOutputStream;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
         import java.io.File;
         import java.io.IOException;
         import java.text.SimpleDateFormat;
@@ -63,15 +67,16 @@ import android.Manifest;
         import io.realm.RealmConfiguration;
         import io.realm.RealmResults;
 
-
-
 public class MainActivity extends AppCompatActivity {
     public static final int MY_PERMISSIONS_REQUEST_CAMERA = 100;
     public static final String ALLOW_KEY = "ALLOWED";
     public static final String CAMERA_PREF = "camera_pref";
     //for taking image
     static final int REQUEST_IMAGE_CAPTURE = 1;
-
+    //unique id for each picture
+    int picture_id = 1;
+    // image name
+    String imageFileName = "";
     //photo path
     String mCurrentPhotoPath;
 
@@ -317,7 +322,6 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         Log.d("BIKIZ", "returning from camera");
         if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
-            Log.d("BIKIZ", "onActivityResult");
             setPic();
         }
     }
@@ -326,7 +330,7 @@ public class MainActivity extends AppCompatActivity {
     private File createImageFile() throws IOException {
         // Create an image file name
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        String imageFileName = "JPEG_" + timeStamp + "_";
+        imageFileName = "JPEG_" + timeStamp + "_";
         File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
         File image = File.createTempFile(
                 imageFileName,  /* prefix */
@@ -347,6 +351,7 @@ public class MainActivity extends AppCompatActivity {
         // Get the dimensions of the bitmap
         BitmapFactory.Options bmOptions = new BitmapFactory.Options();
         bmOptions.inJustDecodeBounds = true;
+
         BitmapFactory.decodeFile(mCurrentPhotoPath, bmOptions);
         int photoW = bmOptions.outWidth;
         int photoH = bmOptions.outHeight;
@@ -358,7 +363,8 @@ public class MainActivity extends AppCompatActivity {
         bmOptions.inJustDecodeBounds = false;
         bmOptions.inSampleSize = scaleFactor;
         bmOptions.inPurgeable = true;
-
+        bmOptions.inSampleSize = 2;
+        bmOptions.inPreferredConfig = Bitmap.Config.RGB_565;
         Bitmap bitmap = BitmapFactory.decodeFile(mCurrentPhotoPath, bmOptions);
         image_captured.setImageBitmap(bitmap);
     }
@@ -386,42 +392,22 @@ public class MainActivity extends AppCompatActivity {
             RealmConfiguration config = new RealmConfiguration.Builder().deleteRealmIfMigrationNeeded().build();
             realm_object = Realm.getInstance(config);
         }
-        Random r = new Random();
-        int picture_id = r.nextInt(80 - 65) + 65;
+
+        picture_id = get_picture_id();
+
         realm_object.beginTransaction();
         PictureDB picture_database = realm_object.createObject(PictureDB.class, picture_id);
         picture_database.set_picture_path(mCurrentPhotoPath);
         realm_object.commitTransaction();
         realm_object.close();
+
         Toast.makeText(this,"Picture Saved.",Toast.LENGTH_SHORT).show();
-    }
-
-    public ArrayList<String> read_picture_database(){
-        Realm realm_object;
-        Realm.init(this);
-        try{
-            realm_object = Realm.getDefaultInstance();
-        }catch (Exception ex){
-            RealmConfiguration config = new RealmConfiguration.Builder().deleteRealmIfMigrationNeeded().build();
-            realm_object = Realm.getInstance(config);
-        }
-        realm_object.beginTransaction();
-
-        RealmResults<PictureDB> pictures_list = realm_object.where(PictureDB.class).findAll();
-        Log.d("BIKIZ", "Picure Size = " + String.valueOf(pictures_list.size()));
-        ArrayList<String> path_array = new ArrayList<String>();
-        for(int i = 0; i < pictures_list.size(); i++){
-            PictureDB picture_path = pictures_list.get(i);
-            path_array.add(picture_path.get_picture_path());
-        }
-        realm_object.commitTransaction();
-        realm_object.close();
-        return path_array;
     }
 
     public void upload_data(){
 
-        final ArrayList<String> picture_paths = read_picture_database();
+        final ArrayList<ArrayList<String>> arrays_image = read_picture_database();
+        Log.d("BIKIZ", "image_array = "+arrays_image);
         StringRequest request = new StringRequest(Request.Method.POST, URL, new Response.Listener<String>() {
             @Override
             public void onResponse(String response) {
@@ -436,27 +422,46 @@ public class MainActivity extends AppCompatActivity {
             @Override
             protected Map<String, String> getParams() throws AuthFailureError {
                 Map<String, String> values = new HashMap<>();
-                //values.put("name", name.getText().toString());
-                /*for(int i = 0; i < picture_paths.size();i++){
-                    Bitmap bitmap = get_bitmap(picture_paths.get(i));
-                    String image = null;
-                    if (bitmap != null) {
-                        image = BitMapToString(bitmap);
-                    }
-                    if (image != null){
-                        values.put("image", image);
-                    }
-                }*/
-                Bitmap bitmap = get_bitmap(picture_paths.get(0));
+                JSONArray image_json = new JSONArray();
 
-                String image = null;
-                if (bitmap != null) {
-                    image = BitMapToString(bitmap);
+                for(int i = 0; i < arrays_image.size();i++){
+                    ArrayList<String> each_image_detail = arrays_image.get(i);
+
+                    String each_image_id = each_image_detail.get(0);
+                    String each_image_path = each_image_detail.get(1);
+                    Bitmap bitmap = get_bitmap(each_image_path);
+                    Bitmap resizedBitmap = Bitmap.createScaledBitmap(
+                            bitmap, 500,500, false);
+                    String each_image_name = get_image_name_from(each_image_path);
+
+                    String image = null;
+                    if (resizedBitmap != null) {
+                        image = BitMapToString(resizedBitmap);
+                    }
+
+
+                    JSONObject each_image_json = new JSONObject();
+                    try{
+                        each_image_json.put("id", each_image_id);
+                        each_image_json.put("name", each_image_name);
+                        each_image_json.put("image", image);
+                    }catch (JSONException ex){
+                        Log.d("BIKIZ", "error =" + ex);
+                    }
+
+                    //put json object into json array
+                    image_json.put(each_image_json);
+                    Log.d("BIKIZ", image_json + "");
                 }
-                Log.d("BIKIZ", image);
-                    values.put("name", "ImageName");
-                    values.put("image", image);
-                    values.put("id", "1001");
+                Log.d("BIKIZ", "json = " + image_json);
+//                JSONObject final_images_json = new JSONObject();
+//                try {
+//                    final_images_json.put("image_list", image_json);
+//                } catch (JSONException e) {
+//                    Log.d("BIKIZ", "final json" + e);
+//                }
+//                Log.d("BIKIZ", "final json" + final_images_json);
+                values.put("images", image_json.toString());
 
                 return values;
             }
@@ -464,18 +469,53 @@ public class MainActivity extends AppCompatActivity {
         queue.add(request);
     }
 
+    public ArrayList<ArrayList<String>> read_picture_database(){
+        Realm realm_object;
+        Realm.init(this);
+        try{
+            realm_object = Realm.getDefaultInstance();
+        }catch (Exception ex){
+            RealmConfiguration config = new RealmConfiguration.Builder().deleteRealmIfMigrationNeeded().build();
+            realm_object = Realm.getInstance(config);
+        }
+
+        realm_object.beginTransaction();
+        RealmResults<PictureDB> pictures_list = realm_object.where(PictureDB.class).findAll();
+        ArrayList<ArrayList<String>> image_array = new ArrayList<>();
+        for(int i = 0; i < pictures_list.size(); i++){
+            ArrayList<String> each_image_array = new ArrayList<String>();
+            PictureDB picture = pictures_list.get(i);
+
+            String image_id = String.valueOf(picture.getPicture_id());
+            String image_path = picture.get_picture_path();
+            each_image_array.add(image_id);
+            each_image_array.add(image_path);
+
+            image_array.add(each_image_array);
+        }
+        realm_object.commitTransaction();
+        realm_object.close();
+        return image_array;
+    }
+
+    private int get_picture_id(){
+        Random r = new Random();
+        return r.nextInt(80 - 65) + 65;
+    }
     private Bitmap get_bitmap(String picture_path){
         Bitmap bitmap = BitmapFactory.decodeFile(picture_path);
-        //File file = new File(mCurrentPhotoPath);
         return bitmap;
     }
 
     public String BitMapToString(Bitmap bitmap){
-        Log.d("BIKIZ", "inside bitmaptostring");
         ByteArrayOutputStream baos=new ByteArrayOutputStream();
         bitmap.compress(Bitmap.CompressFormat.JPEG,100, baos);
         byte [] b=baos.toByteArray();
         String temp= Base64.encodeToString(b, Base64.DEFAULT);
         return temp;
+    }
+
+    public String get_image_name_from(String image_path){
+       return image_path.substring(image_path.lastIndexOf("/") + 1);
     }
 }
